@@ -1,0 +1,35 @@
+{
+  "name": "meow-english",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently \"npm:dev:api\" \"npm:dev:web\"",
+    "dev:web": "vite",
+    "dev:api": "tsx watch server/index.ts",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "api": "tsx server/index.ts"
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "^5.0.0",
+    "better-sqlite3": "^12.10.0",
+    "cookie-parser": "^1.4.7",
+    "express": "^5.2.1",
+    "lucide-react": "^0.468.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.5",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/cookie-parser": "^1.4.10",
+    "@types/express": "^5.0.6",
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "concurrently": "^9.2.1",
+    "tsx": "^4.22.0"
+  }
+}
