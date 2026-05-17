@@ -992,6 +992,12 @@ button:disabled {
   gap: 12px;
 }
 
+.diagnosis-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
 .metric-card {
   min-height: 100px;
   padding: 16px;
@@ -1130,6 +1136,112 @@ button:disabled {
 .hbar-row {
   display: grid;
   gap: 8px;
+}
+
+.review-list,
+.mastery-list,
+.mistake-bars {
+  display: grid;
+  gap: 10px;
+}
+
+.review-row {
+  display: grid;
+  gap: 5px;
+  min-height: 66px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: #f8fafc;
+}
+
+.review-row div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.review-row strong,
+.mastery-row span,
+.mistake-row span {
+  color: #303846;
+  font-weight: 900;
+}
+
+.review-row strong,
+.review-row span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.review-row span,
+.review-row small,
+.mastery-row small {
+  color: var(--muted);
+  font-weight: 800;
+}
+
+.review-row small {
+  font-size: 12px;
+}
+
+.mastery-row,
+.mistake-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px 12px;
+  align-items: center;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: #f8fafc;
+}
+
+.mastery-row .hbar-track,
+.mistake-row .hbar-track {
+  grid-column: 1 / -1;
+}
+
+.mastery-row strong,
+.mistake-row strong {
+  color: var(--indigo);
+  font-weight: 950;
+}
+
+.mastery-row div:first-child {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.heatmap-grid {
+  display: grid;
+  grid-template-columns: repeat(14, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.heatmap-cell {
+  aspect-ratio: 1;
+  min-width: 12px;
+  border-radius: 5px;
+  background: #eef2ff;
+}
+
+.heatmap-cell.level-1 {
+  background: #c7d2fe;
+}
+
+.heatmap-cell.level-2 {
+  background: #a5b4fc;
+}
+
+.heatmap-cell.level-3 {
+  background: #818cf8;
+}
+
+.heatmap-cell.level-4 {
+  background: #4f46e5;
 }
 
 .hbar-row span,
@@ -1567,6 +1679,7 @@ button:disabled {
   }
 
   .admin-kpis,
+  .diagnosis-grid,
   .admin-chart-grid,
   .admin-import-grid,
   .store-grid,
@@ -1575,8 +1688,17 @@ button:disabled {
   }
 
   .admin-table-row,
+  .review-row div,
   .resource-row {
     grid-template-columns: 1fr;
+  }
+
+  .review-row div {
+    display: grid;
+  }
+
+  .heatmap-grid {
+    grid-template-columns: repeat(7, minmax(0, 1fr));
   }
 
   .resource-actions {

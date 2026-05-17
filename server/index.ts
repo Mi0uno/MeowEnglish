@@ -208,9 +208,9 @@ app.post("/api/attempts", requireAuth, asyncHandler(async (req, res) => {
     await client.query(
       `
         INSERT INTO attempt_records (
-          id, user_id, course_id, item_id, answer, wrong_count, elapsed_ms, completed_at
+          id, user_id, course_id, item_id, answer, wrong_count, mistake_stats_json, elapsed_ms, completed_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
       `,
       [
         randomUUID(),
@@ -219,6 +219,11 @@ app.post("/api/attempts", requireAuth, asyncHandler(async (req, res) => {
         body.itemId,
         body.answer,
         body.wrongCount,
+        JSON.stringify(body.mistakeStats ?? {
+          spelling: body.wrongCount,
+          casing: 0,
+          spacing: 0,
+        }),
         body.elapsedMs,
         body.completedAt ?? new Date().toISOString(),
       ],
@@ -570,7 +575,7 @@ app.get("/api/admin/stats", requireAdmin, asyncHandler(async (_req, res) => {
       SELECT
         courses.id as "courseId",
         courses.title,
-        COUNT(attempt_records.id)::int as attempts,
+        COUNT(DISTINCT attempt_records.id)::int as attempts,
         COUNT(DISTINCT practice_items.id)::int as "itemCount"
       FROM courses
       LEFT JOIN practice_items ON practice_items.course_id = courses.id
@@ -618,6 +623,132 @@ app.get("/api/admin/stats", requireAdmin, asyncHandler(async (_req, res) => {
     `,
   );
 
+  const forgetfulItems = await query(
+    `
+      SELECT
+        practice_items.id as "itemId",
+        practice_items.kind,
+        practice_items.prompt_zh as "promptZh",
+        practice_items.answer_en as "answerEn",
+        courses.title as "courseTitle",
+        COUNT(DISTINCT attempt_records.id)::int as attempts,
+        SUM(attempt_records.wrong_count)::int as "wrongCount",
+        COUNT(*) FILTER (WHERE attempt_records.wrong_count > 0)::int as "wrongAttempts",
+        ROUND(AVG(
+          CASE
+            WHEN LENGTH(attempt_records.answer) = 0 THEN 100
+            ELSE GREATEST(0, ((LENGTH(attempt_records.answer) - attempt_records.wrong_count) * 100.0 / LENGTH(attempt_records.answer)))
+          END
+        ))::int as accuracy,
+        MAX(attempt_records.completed_at) as "lastSeenAt"
+      FROM attempt_records
+      JOIN practice_items ON practice_items.id = attempt_records.item_id
+      JOIN courses ON courses.id = practice_items.course_id
+      GROUP BY practice_items.id, courses.title
+      HAVING SUM(attempt_records.wrong_count) > 0
+      ORDER BY "wrongAttempts" DESC, "wrongCount" DESC, "lastSeenAt" DESC
+      LIMIT 12
+    `,
+  );
+
+  const reviewQueue = await query(
+    `
+      WITH item_stats AS (
+        SELECT
+          practice_items.id as "itemId",
+          practice_items.kind,
+          practice_items.prompt_zh as "promptZh",
+          practice_items.answer_en as "answerEn",
+          courses.title as "courseTitle",
+          COUNT(attempt_records.id)::int as attempts,
+          SUM(attempt_records.wrong_count)::int as "wrongCount",
+          COUNT(*) FILTER (WHERE attempt_records.wrong_count > 0)::int as "wrongAttempts",
+          ROUND(AVG(
+            CASE
+              WHEN LENGTH(attempt_records.answer) = 0 THEN 100
+              ELSE GREATEST(0, ((LENGTH(attempt_records.answer) - attempt_records.wrong_count) * 100.0 / LENGTH(attempt_records.answer)))
+            END
+          ))::int as accuracy,
+          MAX(attempt_records.completed_at) as "lastSeenAt"
+        FROM attempt_records
+        JOIN practice_items ON practice_items.id = attempt_records.item_id
+        JOIN courses ON courses.id = practice_items.course_id
+        GROUP BY practice_items.id, courses.title
+      )
+      SELECT
+        *,
+        EXTRACT(DAY FROM NOW() - "lastSeenAt")::int as "daysSinceReview",
+        LEAST(
+          100,
+          GREATEST(
+            0,
+            ("wrongAttempts" * 18)
+              + (100 - accuracy) * 0.7
+              + EXTRACT(DAY FROM NOW() - "lastSeenAt") * 4
+          )
+        )::int as "riskScore"
+      FROM item_stats
+      WHERE "wrongAttempts" > 0
+         OR "lastSeenAt" < NOW() - INTERVAL '3 days'
+      ORDER BY "riskScore" DESC, "lastSeenAt" ASC
+      LIMIT 12
+    `,
+  );
+
+  const masteryByCourse = await query(
+    `
+      SELECT
+        courses.id as "courseId",
+        courses.title,
+        COUNT(DISTINCT practice_items.id)::int as "itemCount",
+        COUNT(attempt_records.id)::int as attempts,
+        COUNT(DISTINCT attempt_records.item_id)::int as "practicedItems",
+        COALESCE(ROUND(AVG(
+          CASE
+            WHEN LENGTH(attempt_records.answer) = 0 THEN 100
+            ELSE GREATEST(0, ((LENGTH(attempt_records.answer) - attempt_records.wrong_count) * 100.0 / LENGTH(attempt_records.answer)))
+          END
+        )), 100)::int as accuracy
+      FROM courses
+      LEFT JOIN practice_items ON practice_items.course_id = courses.id
+      LEFT JOIN attempt_records ON attempt_records.course_id = courses.id
+      GROUP BY courses.id
+      ORDER BY attempts DESC, "itemCount" DESC
+      LIMIT 10
+    `,
+  );
+
+  const heatmap = await query(
+    `
+      WITH days AS (
+        SELECT generate_series(CURRENT_DATE - INTERVAL '41 days', CURRENT_DATE, INTERVAL '1 day')::date as day
+      )
+      SELECT
+        TO_CHAR(days.day, 'YYYY-MM-DD') as date,
+        COALESCE(COUNT(attempt_records.id), 0)::int as attempts,
+        COALESCE(ROUND(AVG(
+          CASE
+            WHEN LENGTH(attempt_records.answer) = 0 THEN 100
+            ELSE GREATEST(0, ((LENGTH(attempt_records.answer) - attempt_records.wrong_count) * 100.0 / LENGTH(attempt_records.answer)))
+          END
+        )), 100)::int as "avgAccuracy"
+      FROM days
+      LEFT JOIN attempt_records ON DATE(attempt_records.completed_at) = days.day
+      GROUP BY days.day
+      ORDER BY days.day ASC
+    `,
+  );
+
+  const mistakeBreakdown = await query(
+    `
+      SELECT
+        COALESCE(SUM(COALESCE((mistake_stats_json::jsonb ->> 'spelling')::int, wrong_count)), 0)::int as spelling,
+        COALESCE(SUM(COALESCE((mistake_stats_json::jsonb ->> 'casing')::int, 0)), 0)::int as casing,
+        COALESCE(SUM(COALESCE((mistake_stats_json::jsonb ->> 'spacing')::int, 0)), 0)::int as spacing
+      FROM attempt_records
+    `,
+  );
+
   res.json({
     stats: {
       totals,
@@ -626,6 +757,11 @@ app.get("/api/admin/stats", requireAdmin, asyncHandler(async (_req, res) => {
       itemKinds,
       recentAttempts,
       recentImports,
+      forgetfulItems,
+      reviewQueue,
+      masteryByCourse,
+      heatmap,
+      mistakeBreakdown: mistakeBreakdown[0] ?? { spelling: 0, casing: 0, spacing: 0 },
     },
   });
 }));

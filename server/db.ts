@@ -110,9 +110,13 @@ async function ensureSchema() {
       item_id TEXT NOT NULL REFERENCES practice_items(id) ON DELETE CASCADE,
       answer TEXT NOT NULL,
       wrong_count INTEGER NOT NULL DEFAULT 0,
+      mistake_stats_json TEXT NOT NULL DEFAULT '{}',
       elapsed_ms INTEGER NOT NULL DEFAULT 0,
       completed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
+
+    ALTER TABLE attempt_records
+      ADD COLUMN IF NOT EXISTS mistake_stats_json TEXT NOT NULL DEFAULT '{}';
 
     CREATE INDEX IF NOT EXISTS idx_attempt_records_user_course
       ON attempt_records(user_id, course_id, completed_at);

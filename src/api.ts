@@ -187,6 +187,46 @@ export type AdminStats = {
     course_title: string;
     created_at: string;
   }>;
+  forgetfulItems: Array<{
+    itemId: string;
+    kind: "word" | "sentence";
+    promptZh: string;
+    answerEn: string;
+    courseTitle: string;
+    attempts: number;
+    wrongCount: number;
+    wrongAttempts: number;
+    accuracy: number;
+    lastSeenAt: string;
+  }>;
+  reviewQueue: Array<{
+    itemId: string;
+    kind: "word" | "sentence";
+    promptZh: string;
+    answerEn: string;
+    courseTitle: string;
+    attempts: number;
+    wrongCount: number;
+    wrongAttempts: number;
+    accuracy: number;
+    lastSeenAt: string;
+    daysSinceReview: number;
+    riskScore: number;
+  }>;
+  masteryByCourse: Array<{
+    courseId: string;
+    title: string;
+    itemCount: number;
+    attempts: number;
+    practicedItems: number;
+    accuracy: number;
+  }>;
+  heatmap: Array<{ date: string; attempts: number; avgAccuracy: number }>;
+  mistakeBreakdown: {
+    spelling: number;
+    casing: number;
+    spacing: number;
+  };
 };
 
 export function getAdminStats() {

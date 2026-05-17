@@ -17,6 +17,13 @@ export const AttemptSchema = z.object({
   itemIndex: z.number().int().min(0),
   answer: z.string().min(1).max(500),
   wrongCount: z.number().int().min(0).max(1000),
+  mistakeStats: z
+    .object({
+      spelling: z.number().int().min(0).max(1000).default(0),
+      casing: z.number().int().min(0).max(1000).default(0),
+      spacing: z.number().int().min(0).max(1000).default(0),
+    })
+    .optional(),
   elapsedMs: z.number().int().min(0).max(24 * 60 * 60 * 1000),
   completedAt: z.string().datetime().optional(),
 });

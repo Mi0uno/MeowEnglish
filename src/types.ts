@@ -40,11 +40,18 @@ export type PracticeMode = "mixed" | "word" | "sentence";
 
 export type LetterState = "pending" | "correct" | "wrong";
 
+export type MistakeStats = {
+  spelling: number;
+  casing: number;
+  spacing: number;
+};
+
 export type AttemptRecord = {
   itemId: string;
   courseId?: string;
   answer: string;
   wrongCount: number;
+  mistakeStats?: MistakeStats;
   elapsedMs: number;
   completedAt: string;
 };

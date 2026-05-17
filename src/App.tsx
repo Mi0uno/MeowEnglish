@@ -51,6 +51,7 @@ import type {
   AttemptRecord,
   Course,
   LetterState,
+  MistakeStats,
   PracticeMode,
 } from "./types";
 
@@ -183,6 +184,16 @@ function buildLetterStates(answer: string, target: string, ignoreCase: boolean) 
   });
 }
 
+function classifyMistake(inputChar: string, targetChar: string): keyof MistakeStats {
+  if (inputChar.toLowerCase() === targetChar.toLowerCase() && inputChar !== targetChar) {
+    return "casing";
+  }
+  if (/\s|[.,!?;:'"()[\]{}\-]/.test(inputChar) || /\s|[.,!?;:'"()[\]{}\-]/.test(targetChar)) {
+    return "spacing";
+  }
+  return "spelling";
+}
+
 function useStoredAttempts() {
   const [attempts, setAttempts] = useState<AttemptRecord[]>(() => {
     try {
@@ -216,6 +227,11 @@ export default function App() {
   const [index, setIndex] = useState(0);
   const [input, setInput] = useState("");
   const [wrongCount, setWrongCount] = useState(0);
+  const [mistakeStats, setMistakeStats] = useState<MistakeStats>({
+    spelling: 0,
+    casing: 0,
+    spacing: 0,
+  });
   const [startedAt, setStartedAt] = useState<number | null>(null);
   const [sessionStartedAt, setSessionStartedAt] = useState<number | null>(null);
   const [clockTick, setClockTick] = useState(0);
@@ -425,6 +441,7 @@ export default function App() {
   function resetQuestion() {
     setInput("");
     setWrongCount(0);
+    setMistakeStats({ spelling: 0, casing: 0, spacing: 0 });
     setStartedAt(null);
     setCompleted(false);
     setShowAnswer(false);
@@ -484,6 +501,17 @@ export default function App() {
     window.setTimeout(() => moveCaptureCaretToEnd(), 0);
     if (newWrong > 0) {
       setWrongCount((count) => count + newWrong);
+      setMistakeStats((current) => {
+        const next = { ...current };
+        nextStates.forEach((state, stateIndex) => {
+          if (state !== "wrong" || previousStates[stateIndex] === "wrong") return;
+          const inputChar = limitedValue[stateIndex] ?? "";
+          const targetChar = activeItem.answerEn[stateIndex] ?? "";
+          const kind = classifyMistake(inputChar, targetChar);
+          next[kind] += 1;
+        });
+        return next;
+      });
       setShakeKey((key) => key + 1);
     }
   }
@@ -497,6 +525,7 @@ export default function App() {
       courseId: attemptCourseId,
       answer: activeItem.answerEn,
       wrongCount,
+      mistakeStats,
       elapsedMs,
       completedAt: new Date().toISOString(),
     };
@@ -1544,9 +1573,16 @@ function AdminOverview({
 
   const maxDaily = Math.max(1, ...stats.dailyAttempts.map((item) => item.attempts));
   const maxCourseAttempts = Math.max(1, ...stats.courseActivity.map((item) => item.attempts));
+  const maxHeatmapAttempts = Math.max(1, ...stats.heatmap.map((item) => item.attempts));
   const totalKinds = Math.max(1, stats.itemKinds.reduce((sum, item) => sum + item.count, 0));
   const wordKind = stats.itemKinds.find((item) => item.kind === "word")?.count ?? 0;
   const wordPercent = Math.round((wordKind / totalKinds) * 100);
+  const totalMistakes = Math.max(
+    1,
+    stats.mistakeBreakdown.spelling +
+      stats.mistakeBreakdown.casing +
+      stats.mistakeBreakdown.spacing,
+  );
 
   return (
     <section className="admin-dashboard">
@@ -1558,7 +1594,144 @@ function AdminOverview({
         <MetricCard label="平均正确率" value={`${stats.totals.avgAccuracy}%`} />
       </div>
 
+      <div className="diagnosis-grid">
+        <div className="admin-section">
+          <div className="admin-section-head">
+            <Clock3 size={18} />
+            <div>
+              <h3>今日应复习</h3>
+              <p>按遗忘风险、错题频率和间隔排序。</p>
+            </div>
+          </div>
+          <div className="review-list">
+            {stats.reviewQueue.length === 0 ? (
+              <p className="empty">暂无复习压力，继续保持。</p>
+            ) : (
+              stats.reviewQueue.slice(0, 6).map((item) => (
+                <div className="review-row" key={item.itemId}>
+                  <div>
+                    <strong>{item.answerEn}</strong>
+                    <span>{item.promptZh}</span>
+                  </div>
+                  <small>
+                    风险 {item.riskScore} · {item.daysSinceReview} 天前 · {item.courseTitle}
+                  </small>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+
+        <div className="admin-section">
+          <div className="admin-section-head">
+            <Trophy size={18} />
+            <div>
+              <h3>常忘词 Top</h3>
+              <p>反复出错的单词和句子。</p>
+            </div>
+          </div>
+          <div className="review-list">
+            {stats.forgetfulItems.length === 0 ? (
+              <p className="empty">还没有高频错题。</p>
+            ) : (
+              stats.forgetfulItems.slice(0, 6).map((item) => (
+                <div className="review-row" key={item.itemId}>
+                  <div>
+                    <strong>{item.answerEn}</strong>
+                    <span>{item.kind === "word" ? "单词" : "句子"} · {item.courseTitle}</span>
+                  </div>
+                  <small>
+                    {item.wrongAttempts} 次出错 · {item.wrongCount} 错 · 正确率 {item.accuracy}%
+                  </small>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      </div>
+
       <div className="admin-chart-grid">
+        <div className="admin-section wide">
+          <div className="admin-section-head">
+            <Target size={18} />
+            <div>
+              <h3>课程掌握率</h3>
+              <p>覆盖进度和正确率合成掌握情况。</p>
+            </div>
+          </div>
+          <div className="mastery-list">
+            {stats.masteryByCourse.map((course) => {
+              const coverage = course.itemCount > 0
+                ? Math.round((course.practicedItems / course.itemCount) * 100)
+                : 0;
+              const mastery = Math.round((coverage * 0.45) + (course.accuracy * 0.55));
+              return (
+                <div className="mastery-row" key={course.courseId}>
+                  <div>
+                    <span>{course.title}</span>
+                    <small>
+                      覆盖 {coverage}% · 正确率 {course.accuracy}% · {course.attempts} 次练习
+                    </small>
+                  </div>
+                  <strong>{mastery}%</strong>
+                  <div className="hbar-track">
+                    <div style={{ width: `${Math.max(4, mastery)}%` }} />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="admin-section">
+          <div className="admin-section-head">
+            <Settings2 size={18} />
+            <div>
+              <h3>错因分类</h3>
+              <p>大小写、标点空格和拼写问题。</p>
+            </div>
+          </div>
+          <div className="mistake-bars">
+            {[
+              { label: "拼写/键位", value: stats.mistakeBreakdown.spelling },
+              { label: "大小写", value: stats.mistakeBreakdown.casing },
+              { label: "空格标点", value: stats.mistakeBreakdown.spacing },
+            ].map((item) => (
+              <div className="mistake-row" key={item.label}>
+                <span>{item.label}</span>
+                <strong>{Math.round((item.value / totalMistakes) * 100)}%</strong>
+                <div className="hbar-track">
+                  <div style={{ width: `${Math.max(4, (item.value / totalMistakes) * 100)}%` }} />
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="admin-section wide">
+          <div className="admin-section-head">
+            <Clock3 size={18} />
+            <div>
+              <h3>每日学习热力图</h3>
+              <p>最近 42 天练习密度。</p>
+            </div>
+          </div>
+          <div className="heatmap-grid">
+            {stats.heatmap.map((item) => {
+              const level = item.attempts === 0
+                ? 0
+                : Math.min(4, Math.ceil((item.attempts / maxHeatmapAttempts) * 4));
+              return (
+                <span
+                  className={`heatmap-cell level-${level}`}
+                  key={item.date}
+                  title={`${item.date} · ${item.attempts} 次 · ${item.avgAccuracy}%`}
+                />
+              );
+            })}
+          </div>
+        </div>
+
         <div className="admin-section wide">
           <div className="admin-section-head">
             <Zap size={18} />
