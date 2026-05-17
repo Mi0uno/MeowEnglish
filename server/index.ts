@@ -336,7 +336,7 @@ app.get("/api/resources", requireAuth, asyncHandler(async (req, res) => {
       SELECT courses.*, users.name as owner_name, COUNT(practice_items.id) as item_count
       FROM courses
       LEFT JOIN users ON users.id = courses.owner_id
-      LEFT JOIN practice_items ON practice_items.course_id = courses.id
+      LEFT JOIN practice_items ON practice_items.course_id = courses.id AND practice_items.is_active = 1
       WHERE courses.owner_id = $1
       GROUP BY courses.id, users.name
       ORDER BY courses.updated_at DESC, courses.created_at DESC
@@ -357,7 +357,7 @@ app.get("/api/resources/store", requireAuth, asyncHandler(async (req, res) => {
       SELECT courses.*, users.name as owner_name, COUNT(practice_items.id) as item_count
       FROM courses
       LEFT JOIN users ON users.id = courses.owner_id
-      LEFT JOIN practice_items ON practice_items.course_id = courses.id
+      LEFT JOIN practice_items ON practice_items.course_id = courses.id AND practice_items.is_active = 1
       WHERE courses.is_public = 1
         AND courses.owner_id IS NOT NULL
         AND courses.owner_id != $1
@@ -539,7 +539,7 @@ app.get("/api/admin/stats", requireAdmin, asyncHandler(async (_req, res) => {
       SELECT
         (SELECT COUNT(*) FROM users)::int as users,
         (SELECT COUNT(*) FROM courses)::int as courses,
-        (SELECT COUNT(*) FROM practice_items)::int as items,
+        (SELECT COUNT(*) FROM practice_items WHERE is_active = 1)::int as items,
         (SELECT COUNT(*) FROM attempt_records)::int as attempts,
         (SELECT COUNT(*) FROM courses WHERE source = 'import')::int as "importedCourses",
         COALESCE(ROUND(AVG(
@@ -578,7 +578,7 @@ app.get("/api/admin/stats", requireAdmin, asyncHandler(async (_req, res) => {
         COUNT(DISTINCT attempt_records.id)::int as attempts,
         COUNT(DISTINCT practice_items.id)::int as "itemCount"
       FROM courses
-      LEFT JOIN practice_items ON practice_items.course_id = courses.id
+      LEFT JOIN practice_items ON practice_items.course_id = courses.id AND practice_items.is_active = 1
       LEFT JOIN attempt_records ON attempt_records.course_id = courses.id
       GROUP BY courses.id
       ORDER BY attempts DESC, courses.created_at DESC
@@ -590,6 +590,7 @@ app.get("/api/admin/stats", requireAdmin, asyncHandler(async (_req, res) => {
     `
       SELECT kind, COUNT(*)::int as count
       FROM practice_items
+      WHERE is_active = 1
       GROUP BY kind
       ORDER BY kind
     `,
@@ -710,7 +711,7 @@ app.get("/api/admin/stats", requireAdmin, asyncHandler(async (_req, res) => {
           END
         )), 100)::int as accuracy
       FROM courses
-      LEFT JOIN practice_items ON practice_items.course_id = courses.id
+      LEFT JOIN practice_items ON practice_items.course_id = courses.id AND practice_items.is_active = 1
       LEFT JOIN attempt_records ON attempt_records.course_id = courses.id
       GROUP BY courses.id
       ORDER BY attempts DESC, "itemCount" DESC

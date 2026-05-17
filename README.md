@@ -14,7 +14,7 @@ MeowEnglish 借鉴了 qwerty-learner 的即时输入反馈体验，也吸收了 
 
 - 单词、句子、混合三种练习模式。
 - 中文提示输入英文答案，支持逐字正确/错误状态反馈。
-- 内置学习资料选择：日常基础、四级、六级、考研、雅思等。
+- 内置学习资料选择：日常基础、翻译组句、会话流畅度、四级、六级、考研、雅思等，当前内置 1000+ 条练习材料。
 - 错题本模式，自动收集做错过的单词和句子。
 - 登录、注册和 Cookie 会话。
 - PostgreSQL/Neon 持久化用户、学习进度、练习记录、资源和上传历史。
@@ -186,6 +186,7 @@ VITE_API_BASE_URL=https://你的后端域名
 | `npm run dev:web` | 只启动 Vite 前端 |
 | `npm run dev:api` | 只启动 Express API |
 | `npm run api` | 启动后端服务 |
+| `npm run generate:materials` | 从开放词库重新生成内置学习资料 |
 | `npm run build` | TypeScript 检查并构建前端产物 |
 | `npm run preview` | 预览构建产物 |
 
@@ -235,10 +236,11 @@ MeowEnglish/
 
 ## 开发说明
 
-- 内置资源会在数据库初始化时写入 `courses` 和 `practice_items`。
+- 内置资源会在数据库初始化时写入 `courses` 和 `practice_items`，再次部署时会同步更新内置课程标题和题目内容。
 - 未登录时练习记录会保存在浏览器本地；登录后会同步保存到后端。
 - 系统内置资源不可编辑或删除；用户导入/下载的资源可以管理。
 - 公开资源不会自动进入其他用户列表，需要对方在资源商店中下载。
+- 内置词汇释义参考开放词库 [skywind3000/ECDICT](https://github.com/skywind3000/ECDICT)（MIT License），内置翻译练习句为本项目原创整理。
 
 ## 致谢
 
@@ -246,5 +248,6 @@ MeowEnglish/
 
 - [cuixiaorui/earthworm](https://github.com/cuixiaorui/earthworm)
 - [RealKai42/qwerty-learner](https://github.com/RealKai42/qwerty-learner)
+- [skywind3000/ECDICT](https://github.com/skywind3000/ECDICT)
 
-实现上请注意各项目许可证边界，不直接复制上游代码和词库数据。
+实现上请注意各项目许可证边界，不直接复制 earthworm / qwerty-learner 上游代码和商业词书数据。

@@ -57,6 +57,7 @@ import type {
 
 const STORAGE_KEY = "meowenglish:attempts";
 const WRONG_BOOK_ID = "wrong-book";
+const CHAPTER_SIZE = 50;
 
 function normalizeAnswer(value: string) {
   return value.replace(/\s+/g, " ").trim().toLowerCase();
@@ -94,6 +95,12 @@ function speak(text: string) {
 function getFilteredItems(course: Course, mode: PracticeMode) {
   if (mode === "mixed") return course.items;
   return course.items.filter((item) => item.kind === mode);
+}
+
+function clampChapterStart(value: number, itemCount: number) {
+  if (itemCount <= 0) return 0;
+  const maxChapterStart = Math.floor((itemCount - 1) / CHAPTER_SIZE) * CHAPTER_SIZE;
+  return Math.min(Math.max(0, value), maxChapterStart);
 }
 
 function seededSortValue(value: string) {
@@ -225,6 +232,7 @@ export default function App() {
   const [courseId, setCourseId] = useState(fallbackCourses[0].id);
   const [mode, setMode] = useState<PracticeMode>("mixed");
   const [index, setIndex] = useState(0);
+  const [chapterStart, setChapterStart] = useState(0);
   const [input, setInput] = useState("");
   const [wrongCount, setWrongCount] = useState(0);
   const [mistakeStats, setMistakeStats] = useState<MistakeStats>({
@@ -329,13 +337,20 @@ export default function App() {
     );
   }, [activeCourse, courseId, mode, shuffle]);
 
-  const activeItem = items[index] ?? items[0] ?? null;
+  const chapterItems = useMemo(
+    () => items.slice(chapterStart, chapterStart + CHAPTER_SIZE),
+    [chapterStart, items],
+  );
+  const activeItem = chapterItems[index] ?? chapterItems[0] ?? null;
+  const chapterNumber = items.length > 0 ? Math.floor(chapterStart / CHAPTER_SIZE) + 1 : 0;
+  const chapterCount = Math.max(1, Math.ceil(items.length / CHAPTER_SIZE));
+  const globalIndex = activeItem ? chapterStart + index : 0;
   const letterStates = useMemo(
     () => (activeItem ? buildLetterStates(input, activeItem.answerEn, ignoreCase) : []),
     [activeItem, input, ignoreCase],
   );
-  const currentProgress = activeItem && items.length > 0
-    ? Math.round(((index + Number(completed)) / items.length) * 100)
+  const currentProgress = activeItem && chapterItems.length > 0
+    ? Math.round(((index + Number(completed)) / chapterItems.length) * 100)
     : 0;
   const isWrongBook = activeCourse.id === WRONG_BOOK_ID;
   const courseAttempts = attempts.filter((record) => {
@@ -344,7 +359,7 @@ export default function App() {
       ? record.courseId === activeCourse.id
       : activeCourse.items.some((item) => item.id === record.itemId);
   });
-  const sessionAttempts = items.length > 0 ? attempts.slice(-items.length) : [];
+  const sessionAttempts = chapterItems.length > 0 ? attempts.slice(-chapterItems.length) : [];
   const isSentence = activeItem?.kind === "sentence";
   const isExact =
     activeItem !== null &&
@@ -378,6 +393,7 @@ export default function App() {
 
   useEffect(() => {
     setIndex(0);
+    setChapterStart(0);
     setChapterFinished(false);
     setIsTyping(false);
     setSessionStartedAt(null);
@@ -386,9 +402,25 @@ export default function App() {
 
   useEffect(() => {
     if (activeCourse.id !== WRONG_BOOK_ID && activeCourse.progress && activeCourse.progress.itemIndex < items.length) {
-      goToItem(activeCourse.progress.itemIndex);
+      const nextChapterStart = Math.floor(activeCourse.progress.itemIndex / CHAPTER_SIZE) * CHAPTER_SIZE;
+      setChapterStart(nextChapterStart);
+      goToItem(activeCourse.progress.itemIndex - nextChapterStart);
     }
   }, [activeCourse.id]);
+
+  useEffect(() => {
+    if (chapterStart >= items.length) {
+      setChapterStart(clampChapterStart(chapterStart, items.length));
+      setIndex(0);
+      resetQuestion();
+      return;
+    }
+
+    if (index >= chapterItems.length) {
+      setIndex(Math.max(0, chapterItems.length - 1));
+      resetQuestion();
+    }
+  }, [chapterItems.length, chapterStart, index, items.length]);
 
   useEffect(() => {
     resetQuestion();
@@ -449,7 +481,7 @@ export default function App() {
 
   function goToItem(nextIndex: number) {
     resetQuestion();
-    setIndex(Math.min(Math.max(0, nextIndex), Math.max(0, items.length - 1)));
+    setIndex(Math.min(Math.max(0, nextIndex), Math.max(0, chapterItems.length - 1)));
   }
 
   function moveCaptureCaretToEnd(element = captureRef.current) {
@@ -534,7 +566,7 @@ export default function App() {
       saveAttempt({
         ...record,
         courseId: attemptCourseId,
-        itemIndex: index,
+        itemIndex: globalIndex,
       })
         .then(() => {
           if (!isWrongBook) return;
@@ -565,7 +597,7 @@ export default function App() {
     setShowAnswer(true);
     speak(activeItem.answerEn);
 
-    if (index >= items.length - 1) {
+    if (index >= chapterItems.length - 1) {
       setIsTyping(false);
       setChapterFinished(true);
     }
@@ -573,7 +605,7 @@ export default function App() {
 
   function goNext() {
     if (!activeItem) return;
-    if (index >= items.length - 1) {
+    if (index >= chapterItems.length - 1) {
       setChapterFinished(true);
       setIsTyping(false);
       return;
@@ -581,8 +613,8 @@ export default function App() {
     if (user && activeCourse.id !== WRONG_BOOK_ID) {
       saveProgress({
         courseId: activeCourse.id,
-        itemId: items[index + 1]?.id ?? null,
-        itemIndex: index + 1,
+        itemId: chapterItems[index + 1]?.id ?? null,
+        itemIndex: globalIndex + 1,
         completedCount: sessionAttempts.length,
       }).catch(() => undefined);
     }
@@ -591,6 +623,14 @@ export default function App() {
 
   function goPrevious() {
     goToItem(index - 1);
+  }
+
+  function goNextChapter() {
+    if (chapterStart + CHAPTER_SIZE >= items.length) {
+      restartCourse();
+      return;
+    }
+    selectChapter(chapterStart + CHAPTER_SIZE);
   }
 
   function handleKeyDown(event: React.KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>) {
@@ -648,6 +688,9 @@ export default function App() {
   }
 
   function toggleShuffle() {
+    setChapterStart(0);
+    setIndex(0);
+    resetQuestion();
     setShuffle((value) => !value);
     if (isTyping) focusCapture();
   }
@@ -659,6 +702,7 @@ export default function App() {
 
   function restartCourse() {
     setIndex(0);
+    setChapterStart(0);
     setChapterFinished(false);
     setIsTyping(false);
     setSessionStartedAt(null);
@@ -669,6 +713,16 @@ export default function App() {
   function repeatCurrent() {
     setChapterFinished(false);
     setIsTyping(false);
+    resetQuestion();
+  }
+
+  function selectChapter(nextChapterStart: number) {
+    setChapterStart(clampChapterStart(nextChapterStart, items.length));
+    setIndex(0);
+    setChapterFinished(false);
+    setIsTyping(false);
+    setSessionStartedAt(null);
+    setClockTick(0);
     resetQuestion();
   }
 
@@ -875,8 +929,9 @@ export default function App() {
         </div>
 
         <div className="progress-block">
+          <span>第 {chapterNumber} / {chapterCount} 章</span>
           <span>
-            {activeItem ? index + 1 : 0} / {items.length}
+            {activeItem ? index + 1 : 0} / {chapterItems.length}
           </span>
           <div className="progress-track">
             <div className="progress-fill" style={{ width: `${currentProgress}%` }} />
@@ -1032,8 +1087,28 @@ export default function App() {
           </div>
         </section>
 
+        {items.length > CHAPTER_SIZE && (
+          <section className="chapter-strip" aria-label="章节选择">
+            {Array.from({ length: chapterCount }, (_, chapterIndex) => {
+              const start = chapterIndex * CHAPTER_SIZE;
+              const end = Math.min(start + CHAPTER_SIZE, items.length);
+              return (
+                <button
+                  className={start === chapterStart ? "active" : ""}
+                  key={start}
+                  onClick={() => selectChapter(start)}
+                  title={`第 ${chapterIndex + 1} 章：${start + 1}-${end}`}
+                >
+                  <span>第 {chapterIndex + 1} 章</span>
+                  <small>{start + 1}-{end}</small>
+                </button>
+              );
+            })}
+          </section>
+        )}
+
         <section className="word-dock" aria-label="本章题目">
-          {items.map((item, itemIndex) => {
+          {chapterItems.map((item, itemIndex) => {
             const itemAttempts = attempts.filter((record) => record.itemId === item.id);
             const hasMistake = itemAttempts.some((record) => record.wrongCount > 0);
             return (
@@ -1041,9 +1116,11 @@ export default function App() {
                 key={item.id}
                 className={`${itemIndex === index ? "active" : ""} ${hasMistake ? "mistake" : ""}`}
                 onClick={() => goToItem(itemIndex)}
-                title={`${item.kind === "word" ? "单词" : "句子"} ${itemIndex + 1}`}
+                title={`${item.kind === "word" ? "单词" : "句子"} ${chapterStart + itemIndex + 1}`}
               >
-                <span>{item.kind === "word" ? "W" : "S"}-{String(itemIndex + 1).padStart(2, "0")}</span>
+                <span>
+                  {item.kind === "word" ? "W" : "S"}-{String(chapterStart + itemIndex + 1).padStart(3, "0")}
+                </span>
                 {itemAttempts.length > 0 && <small>{hasMistake ? "!" : "✓"}</small>}
               </button>
             );
@@ -1106,8 +1183,8 @@ export default function App() {
               <button className="secondary-button" onClick={repeatCurrent}>
                 复练当前题
               </button>
-              <button className="primary-button" onClick={restartCourse}>
-                再练一遍
+              <button className="primary-button" onClick={goNextChapter}>
+                {chapterStart + CHAPTER_SIZE >= items.length ? "再练一遍" : "下一章"}
               </button>
             </div>
           </div>

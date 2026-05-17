@@ -87,8 +87,12 @@ async function ensureSchema() {
       phonetic TEXT,
       note TEXT,
       tags_json TEXT NOT NULL DEFAULT '[]',
-      position INTEGER NOT NULL
+      position INTEGER NOT NULL,
+      is_active INTEGER NOT NULL DEFAULT 1
     );
+
+    ALTER TABLE practice_items
+      ADD COLUMN IF NOT EXISTS is_active INTEGER NOT NULL DEFAULT 1;
 
     CREATE INDEX IF NOT EXISTS idx_practice_items_course
       ON practice_items(course_id, position);
@@ -140,26 +144,45 @@ export async function initDb() {
 async function seedCourses() {
   await transaction(async (client) => {
     for (const course of courses) {
-      const existing = await client.query("SELECT id FROM courses WHERE id = $1", [course.id]);
-      if (existing.rowCount) continue;
-
       await client.query(
         `
           INSERT INTO courses (
             id, title, subtitle, source, owner_id, is_public, copied_from_course_id, updated_at
           )
           VALUES ($1, $2, $3, 'seed', NULL, 0, NULL, NOW())
+          ON CONFLICT (id) DO UPDATE SET
+            title = EXCLUDED.title,
+            subtitle = EXCLUDED.subtitle,
+            source = 'seed',
+            owner_id = NULL,
+            is_public = 0,
+            updated_at = NOW()
         `,
         [course.id, course.title, course.subtitle],
+      );
+
+      await client.query(
+        "UPDATE practice_items SET is_active = 0 WHERE course_id = $1",
+        [course.id],
       );
 
       for (const [position, item] of course.items.entries()) {
         await client.query(
           `
             INSERT INTO practice_items (
-              id, course_id, kind, prompt_zh, answer_en, phonetic, note, tags_json, position
+              id, course_id, kind, prompt_zh, answer_en, phonetic, note, tags_json, position, is_active
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 1)
+            ON CONFLICT (id) DO UPDATE SET
+              course_id = EXCLUDED.course_id,
+              kind = EXCLUDED.kind,
+              prompt_zh = EXCLUDED.prompt_zh,
+              answer_en = EXCLUDED.answer_en,
+              phonetic = EXCLUDED.phonetic,
+              note = EXCLUDED.note,
+              tags_json = EXCLUDED.tags_json,
+              position = EXCLUDED.position,
+              is_active = 1
           `,
           [
             item.id,
@@ -180,7 +203,7 @@ async function seedCourses() {
 
 export async function listItemsByCourse(courseId: string) {
   return query<ItemRow>(
-    "SELECT * FROM practice_items WHERE course_id = $1 ORDER BY position ASC",
+    "SELECT * FROM practice_items WHERE course_id = $1 AND is_active = 1 ORDER BY position ASC",
     [courseId],
   );
 }

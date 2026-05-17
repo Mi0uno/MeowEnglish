@@ -39,6 +39,7 @@ export type ItemRow = {
   note: string | null;
   tags_json: string;
   position: number;
+  is_active: number;
 };
 
 export type ProgressRow = {
