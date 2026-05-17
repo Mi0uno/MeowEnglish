@@ -11,8 +11,10 @@ type ApiOptions = RequestInit & {
   json?: unknown;
 };
 
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, "") ?? "";
+
 async function api<T>(path: string, options: ApiOptions = {}): Promise<T> {
-  const response = await fetch(path, {
+  const response = await fetch(`${API_BASE_URL}${path}`, {
     ...options,
     headers: {
       ...(options.json ? { "Content-Type": "application/json" } : {}),

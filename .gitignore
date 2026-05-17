@@ -6,3 +6,6 @@ vite.config.d.ts
 .dev-server.*.log
 .api-server.*.log
 /data/
+.env
+.env.*
+!.env.example

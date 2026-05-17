@@ -8,7 +8,7 @@ MeowEnglish 借鉴了 qwerty-learner 的即时输入反馈体验，也吸收了 
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.7-3178c6?style=flat-square)
 ![Vite](https://img.shields.io/badge/Vite-6.0-646cff?style=flat-square)
 ![Express](https://img.shields.io/badge/Express-5.2-222?style=flat-square)
-![SQLite](https://img.shields.io/badge/SQLite-better--sqlite3-0f80cc?style=flat-square)
+![PostgreSQL](https://img.shields.io/badge/PostgreSQL-Neon-336791?style=flat-square)
 
 ## 功能特性
 
@@ -17,7 +17,7 @@ MeowEnglish 借鉴了 qwerty-learner 的即时输入反馈体验，也吸收了 
 - 内置学习资料选择：日常基础、四级、六级、考研、雅思等。
 - 错题本模式，自动收集做错过的单词和句子。
 - 登录、注册和 Cookie 会话。
-- SQLite 持久化用户、学习进度、练习记录、资源和上传历史。
+- PostgreSQL/Neon 持久化用户、学习进度、练习记录、资源和上传历史。
 - 后台学习统计：用户、课程、题目、练习次数、平均正确率、趋势图和课程活跃度。
 - 学习资料导入、编辑、删除和公开设置。
 - 资源商店：用户公开资源后，其他用户可以下载到自己的学习资料中。
@@ -29,7 +29,7 @@ MeowEnglish 借鉴了 qwerty-learner 的即时输入反馈体验，也吸收了 
 | --- | --- |
 | 前端 | React 18、TypeScript、Vite、lucide-react |
 | 后端 | Express 5、TypeScript、tsx |
-| 数据库 | SQLite、better-sqlite3 |
+| 数据库 | PostgreSQL、Neon、pg |
 | 校验 | zod |
 | 样式 | 原生 CSS、响应式布局 |
 
@@ -46,6 +46,20 @@ MeowEnglish 借鉴了 qwerty-learner 的即时输入反馈体验，也吸收了 
 
 ```bash
 npm install
+```
+
+### 配置环境变量
+
+```bash
+cp .env.example .env
+```
+
+编辑 `.env`，填入你的 Neon/PostgreSQL 连接串：
+
+```bash
+DATABASE_URL=postgresql://user:password@host/database?sslmode=require
+CORS_ORIGIN=http://localhost:5173
+API_PORT=5174
 ```
 
 ### 启动开发环境
@@ -74,16 +88,12 @@ npm run build
 
 ## 数据库
 
-项目默认使用 SQLite，数据库文件会自动创建在：
+项目使用 PostgreSQL，推荐 Neon。后端启动时会自动创建表，并把内置学习资料写入 `courses` 和 `practice_items`。
 
-```text
-data/meowenglish.sqlite
-```
-
-可以通过环境变量修改数据库位置：
+本地开发和生产环境都通过 `DATABASE_URL` 连接数据库：
 
 ```bash
-DB_PATH=./data/custom.sqlite npm run dev
+DATABASE_URL=postgresql://user:password@host/database?sslmode=require
 ```
 
 后端端口也可以通过环境变量调整：
@@ -91,6 +101,29 @@ DB_PATH=./data/custom.sqlite npm run dev
 ```bash
 API_PORT=5180 npm run dev
 ```
+
+> [!IMPORTANT]
+> 不要把真实数据库连接串提交到 GitHub。把它放在 `.env` 或部署平台的环境变量里。
+
+## 部署说明
+
+GitHub Pages 只能托管前端静态文件，不能运行 Express 后端，也不能直接安全连接数据库。完整线上功能需要两部分：
+
+1. 将后端部署到 Render、Railway、Fly.io 等 Node.js 平台，并设置：
+
+```bash
+DATABASE_URL=你的 Neon 连接串
+CORS_ORIGIN=https://mi0uno.github.io
+NODE_ENV=production
+```
+
+2. GitHub Pages 构建前端时设置：
+
+```bash
+VITE_API_BASE_URL=https://你的后端域名
+```
+
+这样 GitHub Pages 前端会请求线上 API，线上 API 再连接 Neon 数据库。
 
 ## 学习资料格式
 
@@ -159,11 +192,11 @@ MeowEnglish/
 │  └─ types.ts             # 前端领域类型
 ├─ server/
 │  ├─ index.ts             # Express 路由
-│  ├─ db.ts                # SQLite schema、查询和种子数据
+│  ├─ db.ts                # PostgreSQL schema、查询和种子数据
 │  ├─ auth.ts              # 认证、会话和权限中间件
 │  ├─ schemas.ts           # zod 请求校验
 │  └─ types.ts             # 数据库类型
-├─ data/                   # SQLite 数据目录
+├─ .env.example            # 环境变量示例
 ├─ index.html
 ├─ package.json
 └─ vite.config.ts

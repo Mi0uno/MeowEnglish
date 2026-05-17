@@ -1,6 +1,6 @@
 import type { NextFunction, Request, Response } from "express";
 import { randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
-import { queries } from "./db";
+import { execute, queryOne } from "./db";
 import type { SessionUser } from "./types";
 
 export const SESSION_COOKIE = "meow_session";
@@ -30,54 +30,78 @@ export function verifyPassword(password: string, passwordHash: string) {
   return expected.length === actual.length && timingSafeEqual(expected, actual);
 }
 
-export function createSession(res: Response, userId: string) {
+export async function createSession(res: Response, userId: string) {
   const sessionId = randomBytes(32).toString("hex");
   const expiresAt = new Date(Date.now() + SESSION_DAYS * 24 * 60 * 60 * 1000);
-  queries.createSession.run(sessionId, userId, expiresAt.toISOString());
+  await execute("INSERT INTO sessions (id, user_id, expires_at) VALUES ($1, $2, $3)", [
+    sessionId,
+    userId,
+    expiresAt.toISOString(),
+  ]);
   res.cookie(SESSION_COOKIE, sessionId, {
     httpOnly: true,
-    sameSite: "lax",
+    sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
     secure: process.env.NODE_ENV === "production",
     maxAge: SESSION_DAYS * 24 * 60 * 60 * 1000,
     path: "/",
   });
 }
 
-export function clearSession(req: Request, res: Response) {
+export async function clearSession(req: Request, res: Response) {
   const sessionId = req.cookies?.[SESSION_COOKIE];
-  if (sessionId) queries.deleteSession.run(sessionId);
-  res.clearCookie(SESSION_COOKIE, { path: "/" });
+  if (sessionId) await execute("DELETE FROM sessions WHERE id = $1", [sessionId]);
+  res.clearCookie(SESSION_COOKIE, {
+    path: "/",
+    sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
+    secure: process.env.NODE_ENV === "production",
+  });
 }
 
-export function attachUser(req: Request, _res: Response, next: NextFunction) {
-  queries.deleteExpiredSessions.run();
-  const sessionId = req.cookies?.[SESSION_COOKIE];
-  if (!sessionId) return next();
+export async function attachUser(req: Request, _res: Response, next: NextFunction) {
+  try {
+    await execute("DELETE FROM sessions WHERE expires_at < NOW()");
+    const sessionId = req.cookies?.[SESSION_COOKIE];
+    if (!sessionId) return next();
 
-  const row = queries.findSession.get(sessionId) as
-    | {
-        id: string;
-        expires_at: string;
-        user_id: string;
-        email: string;
-        name: string;
-        role: "admin" | "student";
-      }
-    | undefined;
+    const row = await queryOne<{
+      id: string;
+      expires_at: string | Date;
+      user_id: string;
+      email: string;
+      name: string;
+      role: "admin" | "student";
+    }>(
+      `
+        SELECT
+          sessions.id,
+          sessions.expires_at,
+          users.id as user_id,
+          users.email,
+          users.name,
+          users.role
+        FROM sessions
+        JOIN users ON users.id = sessions.user_id
+        WHERE sessions.id = $1
+      `,
+      [sessionId],
+    );
 
-  if (!row || new Date(row.expires_at).getTime() < Date.now()) {
-    queries.deleteSession.run(sessionId);
+    if (!row || new Date(row.expires_at).getTime() < Date.now()) {
+      await execute("DELETE FROM sessions WHERE id = $1", [sessionId]);
+      return next();
+    }
+
+    req.sessionId = row.id;
+    req.user = {
+      id: row.user_id,
+      email: row.email,
+      name: row.name,
+      role: row.role,
+    };
     return next();
+  } catch (error) {
+    return next(error);
   }
-
-  req.sessionId = row.id;
-  req.user = {
-    id: row.user_id,
-    email: row.email,
-    name: row.name,
-    role: row.role,
-  };
-  return next();
 }
 
 export function requireAuth(req: Request, res: Response, next: NextFunction) {

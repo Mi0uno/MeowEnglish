@@ -1,33 +1,68 @@
-import Database from "better-sqlite3";
-import { mkdirSync } from "node:fs";
-import { dirname, join } from "node:path";
+import pg from "pg";
+import "dotenv/config";
 import { courses } from "../src/data/courses";
 import type { CourseRow, DbUser, ItemRow, ProgressRow } from "./types";
 
-const dataDir = join(process.cwd(), "data");
-const dbPath = process.env.DB_PATH ?? join(dataDir, "meowenglish.sqlite");
-mkdirSync(dirname(dbPath), { recursive: true });
+const { Pool } = pg;
 
-export const db = new Database(dbPath);
-db.pragma("journal_mode = WAL");
-db.pragma("foreign_keys = ON");
+const databaseUrl = process.env.DATABASE_URL;
 
-function ensureSchema() {
-  db.exec(`
+if (!databaseUrl) {
+  throw new Error("DATABASE_URL is required. Use your Neon PostgreSQL connection string.");
+}
+
+export const pool = new Pool({
+  connectionString: databaseUrl,
+  ssl: databaseUrl.includes("sslmode=require") ? undefined : { rejectUnauthorized: false },
+});
+
+type QueryParams = Array<string | number | boolean | null>;
+
+export async function query<T = unknown>(text: string, params: QueryParams = []) {
+  const result = await pool.query<T>(text, params);
+  return result.rows;
+}
+
+export async function queryOne<T = unknown>(text: string, params: QueryParams = []) {
+  const rows = await query<T>(text, params);
+  return rows[0];
+}
+
+export async function execute(text: string, params: QueryParams = []) {
+  await pool.query(text, params);
+}
+
+export async function transaction<T>(callback: (client: pg.PoolClient) => Promise<T>) {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const result = await callback(client);
+    await client.query("COMMIT");
+    return result;
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function ensureSchema() {
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS users (
       id TEXT PRIMARY KEY,
       email TEXT NOT NULL UNIQUE,
       name TEXT NOT NULL,
       password_hash TEXT NOT NULL,
       role TEXT NOT NULL CHECK (role IN ('admin', 'student')),
-      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
 
     CREATE TABLE IF NOT EXISTS sessions (
       id TEXT PRIMARY KEY,
       user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-      expires_at TEXT NOT NULL,
-      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      expires_at TIMESTAMPTZ NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
 
     CREATE TABLE IF NOT EXISTS courses (
@@ -39,8 +74,8 @@ function ensureSchema() {
       is_public INTEGER NOT NULL DEFAULT 0,
       download_count INTEGER NOT NULL DEFAULT 0,
       copied_from_course_id TEXT REFERENCES courses(id) ON DELETE SET NULL,
-      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
 
     CREATE TABLE IF NOT EXISTS practice_items (
@@ -64,7 +99,7 @@ function ensureSchema() {
       item_id TEXT REFERENCES practice_items(id) ON DELETE SET NULL,
       item_index INTEGER NOT NULL DEFAULT 0,
       completed_count INTEGER NOT NULL DEFAULT 0,
-      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       PRIMARY KEY (user_id, course_id)
     );
 
@@ -76,7 +111,7 @@ function ensureSchema() {
       answer TEXT NOT NULL,
       wrong_count INTEGER NOT NULL DEFAULT 0,
       elapsed_ms INTEGER NOT NULL DEFAULT 0,
-      completed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      completed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
 
     CREATE INDEX IF NOT EXISTS idx_attempt_records_user_course
@@ -88,207 +123,99 @@ function ensureSchema() {
       course_id TEXT REFERENCES courses(id) ON DELETE SET NULL,
       filename TEXT NOT NULL,
       item_count INTEGER NOT NULL,
-      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
   `);
-
-  const courseColumns = db.prepare("PRAGMA table_info(courses)").all() as Array<{ name: string }>;
-  const columnNames = new Set(courseColumns.map((column) => column.name));
-  if (!columnNames.has("is_public")) {
-    db.exec("ALTER TABLE courses ADD COLUMN is_public INTEGER NOT NULL DEFAULT 0");
-  }
-  if (!columnNames.has("download_count")) {
-    db.exec("ALTER TABLE courses ADD COLUMN download_count INTEGER NOT NULL DEFAULT 0");
-  }
-  if (!columnNames.has("copied_from_course_id")) {
-    db.exec("ALTER TABLE courses ADD COLUMN copied_from_course_id TEXT REFERENCES courses(id) ON DELETE SET NULL");
-  }
-  if (!columnNames.has("updated_at")) {
-    db.exec("ALTER TABLE courses ADD COLUMN updated_at TEXT");
-  }
-  db.exec("UPDATE courses SET updated_at = COALESCE(updated_at, created_at, CURRENT_TIMESTAMP)");
 }
 
-ensureSchema();
-
-export function initDb() {
-  seedCourses();
+export async function initDb() {
+  await ensureSchema();
+  await seedCourses();
 }
 
-function seedCourses() {
-  const hasCourse = db.prepare("SELECT id FROM courses WHERE id = ?");
-  const insertCourse = db.prepare(`
-    INSERT INTO courses (id, title, subtitle, source, owner_id, is_public, copied_from_course_id, updated_at)
-    VALUES (@id, @title, @subtitle, 'seed', NULL, 0, NULL, CURRENT_TIMESTAMP)
-  `);
-  const insertItem = db.prepare(`
-    INSERT INTO practice_items (
-      id, course_id, kind, prompt_zh, answer_en, phonetic, note, tags_json, position
-    )
-    VALUES (
-      @id, @courseId, @kind, @promptZh, @answerEn, @phonetic, @note, @tagsJson, @position
-    )
-  `);
-
-  const seed = db.transaction(() => {
+async function seedCourses() {
+  await transaction(async (client) => {
     for (const course of courses) {
-      if (hasCourse.get(course.id)) continue;
-      insertCourse.run(course);
-      course.items.forEach((item, position) => {
-        insertItem.run({
-          ...item,
-          courseId: course.id,
-          phonetic: item.phonetic ?? null,
-          note: item.note ?? null,
-          tagsJson: JSON.stringify(item.tags),
-          position,
-        });
-      });
+      const existing = await client.query("SELECT id FROM courses WHERE id = $1", [course.id]);
+      if (existing.rowCount) continue;
+
+      await client.query(
+        `
+          INSERT INTO courses (
+            id, title, subtitle, source, owner_id, is_public, copied_from_course_id, updated_at
+          )
+          VALUES ($1, $2, $3, 'seed', NULL, 0, NULL, NOW())
+        `,
+        [course.id, course.title, course.subtitle],
+      );
+
+      for (const [position, item] of course.items.entries()) {
+        await client.query(
+          `
+            INSERT INTO practice_items (
+              id, course_id, kind, prompt_zh, answer_en, phonetic, note, tags_json, position
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+          `,
+          [
+            item.id,
+            course.id,
+            item.kind,
+            item.promptZh,
+            item.answerEn,
+            item.phonetic ?? null,
+            item.note ?? null,
+            JSON.stringify(item.tags),
+            position,
+          ],
+        );
+      }
     }
   });
-
-  seed();
 }
 
-export const queries = {
-  countUsers: db.prepare("SELECT COUNT(*) as count FROM users"),
-  createUser: db.prepare(`
-    INSERT INTO users (id, email, name, password_hash, role)
-    VALUES (@id, @email, @name, @passwordHash, @role)
-  `),
-  findUserByEmail: db.prepare("SELECT * FROM users WHERE email = ?"),
-  findUserById: db.prepare("SELECT * FROM users WHERE id = ?"),
-  createSession: db.prepare(`
-    INSERT INTO sessions (id, user_id, expires_at)
-    VALUES (?, ?, ?)
-  `),
-  deleteSession: db.prepare("DELETE FROM sessions WHERE id = ?"),
-  findSession: db.prepare(`
-    SELECT sessions.id, sessions.expires_at, users.id as user_id, users.email, users.name, users.role
-    FROM sessions
-    JOIN users ON users.id = sessions.user_id
-    WHERE sessions.id = ?
-  `),
-  deleteExpiredSessions: db.prepare("DELETE FROM sessions WHERE expires_at < CURRENT_TIMESTAMP"),
-  listCourses: db.prepare("SELECT * FROM courses ORDER BY created_at ASC"),
-  listSeedCourses: db.prepare(`
-    SELECT courses.*, users.name as owner_name
-    FROM courses
-    LEFT JOIN users ON users.id = courses.owner_id
-    WHERE courses.source = 'seed'
-    ORDER BY courses.created_at ASC
-  `),
-  listVisibleCourses: db.prepare(`
-    SELECT courses.*, users.name as owner_name
-    FROM courses
-    LEFT JOIN users ON users.id = courses.owner_id
-    WHERE courses.source = 'seed'
-      OR courses.owner_id = ?
-    ORDER BY courses.created_at ASC
-  `),
-  listOwnedCourses: db.prepare(`
-    SELECT courses.*, users.name as owner_name, COUNT(practice_items.id) as item_count
-    FROM courses
-    LEFT JOIN users ON users.id = courses.owner_id
-    LEFT JOIN practice_items ON practice_items.course_id = courses.id
-    WHERE courses.owner_id = ?
-    GROUP BY courses.id
-    ORDER BY courses.updated_at DESC, courses.created_at DESC
-  `),
-  listPublicCourses: db.prepare(`
-    SELECT courses.*, users.name as owner_name, COUNT(practice_items.id) as item_count
-    FROM courses
-    LEFT JOIN users ON users.id = courses.owner_id
-    LEFT JOIN practice_items ON practice_items.course_id = courses.id
-    WHERE courses.is_public = 1
-      AND courses.owner_id IS NOT NULL
-      AND courses.owner_id != ?
-      AND courses.id NOT IN (
-        SELECT copied_from_course_id FROM courses
-        WHERE owner_id = ? AND copied_from_course_id IS NOT NULL
-      )
-    GROUP BY courses.id
-    ORDER BY courses.download_count DESC, courses.updated_at DESC, courses.created_at DESC
-  `),
-  getCourseById: db.prepare("SELECT * FROM courses WHERE id = ?"),
-  listItemsByCourse: db.prepare("SELECT * FROM practice_items WHERE course_id = ? ORDER BY position ASC"),
-  getProgress: db.prepare("SELECT * FROM user_progress WHERE user_id = ? AND course_id = ?"),
-  upsertProgress: db.prepare(`
-    INSERT INTO user_progress (user_id, course_id, item_id, item_index, completed_count, updated_at)
-    VALUES (@userId, @courseId, @itemId, @itemIndex, @completedCount, CURRENT_TIMESTAMP)
-    ON CONFLICT(user_id, course_id) DO UPDATE SET
-      item_id = excluded.item_id,
-      item_index = excluded.item_index,
-      completed_count = excluded.completed_count,
-      updated_at = CURRENT_TIMESTAMP
-  `),
-  createAttempt: db.prepare(`
-    INSERT INTO attempt_records (id, user_id, course_id, item_id, answer, wrong_count, elapsed_ms, completed_at)
-    VALUES (@id, @userId, @courseId, @itemId, @answer, @wrongCount, @elapsedMs, @completedAt)
-  `),
-  listAttempts: db.prepare(`
-    SELECT * FROM attempt_records
-    WHERE user_id = ? AND course_id = ?
-    ORDER BY completed_at DESC
-    LIMIT 120
-  `),
-  listWrongBookItems: db.prepare(`
-    SELECT
-      practice_items.*,
-      courses.id as source_course_id,
-      courses.title as source_course_title,
-      SUM(attempt_records.wrong_count) as wrong_count,
-      COUNT(attempt_records.id) as wrong_attempts,
-      MAX(attempt_records.completed_at) as last_wrong_at
-    FROM attempt_records
-    JOIN practice_items ON practice_items.id = attempt_records.item_id
-    JOIN courses ON courses.id = practice_items.course_id
-    WHERE attempt_records.user_id = ?
-      AND attempt_records.wrong_count > 0
-    GROUP BY practice_items.id
-    ORDER BY last_wrong_at DESC
-    LIMIT 300
-  `),
-  createCourse: db.prepare(`
-    INSERT INTO courses (id, title, subtitle, source, owner_id, is_public, copied_from_course_id, updated_at)
-    VALUES (@id, @title, @subtitle, @source, @ownerId, @isPublic, @copiedFromCourseId, CURRENT_TIMESTAMP)
-  `),
-  updateCourse: db.prepare(`
-    UPDATE courses
-    SET title = @title,
-        subtitle = @subtitle,
-        is_public = @isPublic,
-        updated_at = CURRENT_TIMESTAMP
-    WHERE id = @courseId AND owner_id = @userId
-  `),
-  deleteCourse: db.prepare("DELETE FROM courses WHERE id = ? AND owner_id = ?"),
-  deleteItemsByCourse: db.prepare("DELETE FROM practice_items WHERE course_id = ?"),
-  incrementDownloadCount: db.prepare(`
-    UPDATE courses
-    SET download_count = download_count + 1,
-        updated_at = CURRENT_TIMESTAMP
-    WHERE id = ?
-  `),
-  createItem: db.prepare(`
-    INSERT INTO practice_items (
-      id, course_id, kind, prompt_zh, answer_en, phonetic, note, tags_json, position
-    )
-    VALUES (
-      @id, @courseId, @kind, @promptZh, @answerEn, @phonetic, @note, @tagsJson, @position
-    )
-  `),
-  createImportJob: db.prepare(`
-    INSERT INTO import_jobs (id, user_id, course_id, filename, item_count)
-    VALUES (@id, @userId, @courseId, @filename, @itemCount)
-  `),
-  listImportJobs: db.prepare(`
-    SELECT import_jobs.*, courses.title as course_title
-    FROM import_jobs
-    LEFT JOIN courses ON courses.id = import_jobs.course_id
-    ORDER BY import_jobs.created_at DESC
-    LIMIT 30
-  `),
-};
+export async function listItemsByCourse(courseId: string) {
+  return query<ItemRow>(
+    "SELECT * FROM practice_items WHERE course_id = $1 ORDER BY position ASC",
+    [courseId],
+  );
+}
+
+export async function insertCourseItems(
+  client: pg.PoolClient,
+  courseId: string,
+  items: Array<{
+    id: string;
+    kind: "word" | "sentence";
+    promptZh: string;
+    answerEn: string;
+    phonetic?: string | null;
+    note?: string | null;
+    tags: string[];
+  }>,
+) {
+  for (const [position, item] of items.entries()) {
+    await client.query(
+      `
+        INSERT INTO practice_items (
+          id, course_id, kind, prompt_zh, answer_en, phonetic, note, tags_json, position
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      `,
+      [
+        item.id,
+        courseId,
+        item.kind,
+        item.promptZh,
+        item.answerEn,
+        item.phonetic ?? null,
+        item.note ?? null,
+        JSON.stringify(item.tags),
+        position,
+      ],
+    );
+  }
+}
 
 export function mapUser(row: DbUser) {
   return {
@@ -308,7 +235,7 @@ export function mapCourse(row: CourseRow, itemRows: ItemRow[], progress?: Progre
     ownerId: row.owner_id,
     ownerName: "owner_name" in row ? (row as CourseRow & { owner_name?: string }).owner_name : undefined,
     isPublic: Boolean(row.is_public),
-    downloadCount: row.download_count,
+    downloadCount: Number(row.download_count ?? 0),
     copiedFromCourseId: row.copied_from_course_id,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -324,8 +251,8 @@ export function mapCourse(row: CourseRow, itemRows: ItemRow[], progress?: Progre
     progress: progress
       ? {
           itemId: progress.item_id,
-          itemIndex: progress.item_index,
-          completedCount: progress.completed_count,
+          itemIndex: Number(progress.item_index),
+          completedCount: Number(progress.completed_count),
           updatedAt: progress.updated_at,
         }
       : undefined,
