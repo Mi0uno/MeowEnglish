@@ -46,7 +46,7 @@ import {
   type User,
   type AdminStats,
 } from "./api";
-import { courses as fallbackCourses } from "./data/courses";
+import { emptyCourses } from "./data/courseCatalog";
 import type {
   AttemptRecord,
   Course,
@@ -58,6 +58,7 @@ import type {
 const STORAGE_KEY = "meowenglish:attempts";
 const WRONG_BOOK_ID = "wrong-book";
 const CHAPTER_SIZE = 50;
+const fallbackCourses = emptyCourses;
 
 function normalizeAnswer(value: string) {
   return value.replace(/\s+/g, " ").trim().toLowerCase();

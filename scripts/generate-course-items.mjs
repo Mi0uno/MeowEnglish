@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const rootDir = join(__dirname, "..");
 const ecdictPath = process.env.ECDICT_CSV ?? join(tmpdir(), "meowenglish-ecdict.csv");
-const outputPath = join(rootDir, "src", "data", "courseItems.ts");
+const outputPath = join(rootDir, "src", "data", "courseItems.json");
 const ecdictUrl = "https://raw.githubusercontent.com/skywind3000/ECDICT/master/ecdict.csv";
 
 const dailyPrompts = {
@@ -606,6 +606,11 @@ function cleanTranslation(value) {
   return Array.from(new Set(pieces)).slice(0, 4).join("；");
 }
 
+function parseInteger(value) {
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 999_999;
+}
+
 async function downloadEcdict() {
   if (existsSync(ecdictPath) && statSync(ecdictPath).size > 1_000_000) return;
   await mkdir(dirname(ecdictPath), { recursive: true });
@@ -641,9 +646,44 @@ function buildDictionary(rows) {
       word,
       promptZh,
       phonetic: row.phonetic?.trim() ?? "",
+      tags: (row.tag ?? "").split(/\s+/).filter(Boolean),
+      frq: parseInteger(row.frq ?? ""),
+      bnc: parseInteger(row.bnc ?? ""),
+      collins: parseInteger(row.collins ?? ""),
     });
   });
   return dictionary;
+}
+
+function isPracticeWord(entry) {
+  return /^[A-Za-z][A-Za-z-]*$/.test(entry.word) && entry.word.length <= 28;
+}
+
+function selectTaggedWords(dictionary, primaryTags, options = {}) {
+  const { minCount, supplementalTags = [] } = options;
+  const byRank = (left, right) =>
+    left.frq - right.frq ||
+    left.bnc - right.bnc ||
+    left.word.localeCompare(right.word);
+  const hasAnyTag = (entry, tags) => tags.some((tag) => entry.tags.includes(tag));
+  const selected = new Map();
+
+  Array.from(dictionary.values())
+    .filter((entry) => isPracticeWord(entry) && hasAnyTag(entry, primaryTags))
+    .sort(byRank)
+    .forEach((entry) => selected.set(entry.word.toLowerCase(), entry.word));
+
+  if (minCount && selected.size < minCount) {
+    Array.from(dictionary.values())
+      .filter((entry) => isPracticeWord(entry) && hasAnyTag(entry, supplementalTags))
+      .sort(byRank)
+      .some((entry) => {
+        selected.set(entry.word.toLowerCase(), entry.word);
+        return selected.size >= minCount;
+      });
+  }
+
+  return Array.from(selected.values());
 }
 
 function buildWordItems(dictionary, prefix, words, tagLabel) {
@@ -674,16 +714,22 @@ function buildSentenceItems(prefix, sentences, tagLabel) {
   }));
 }
 
-function toTypeScript(value) {
-  return JSON.stringify(value, null, 2).replace(/"([^"]+)":/g, "$1:");
-}
-
 async function main() {
   await downloadEcdict();
   const rows = parseCsv(await readFile(ecdictPath, "utf8"));
   const dictionary = buildDictionary(rows);
+  const completeExamWordLists = {
+    cet4: selectTaggedWords(dictionary, ["cet4"], { minCount: 4_000, supplementalTags: ["gk", "ielts"] }),
+    cet6: selectTaggedWords(dictionary, ["cet6"], { minCount: 5_000, supplementalTags: ["ky", "toefl"] }),
+    kaoyan: selectTaggedWords(dictionary, ["ky"], { minCount: 5_000, supplementalTags: ["cet6", "toefl"] }),
+    ielts: selectTaggedWords(dictionary, ["ielts"], { minCount: 4_500, supplementalTags: ["toefl", "cet6"] }),
+  };
+  const resolvedWordLists = {
+    ...courseWordLists,
+    ...completeExamWordLists,
+  };
   const courseItems = Object.fromEntries(
-    Object.entries(courseWordLists).map(([key, words]) => {
+    Object.entries(resolvedWordLists).map(([key, words]) => {
       const prefix = key === "kaoyan" ? "kaoyan" : key;
       const tagLabel = {
         daily: "daily",
@@ -711,8 +757,7 @@ async function main() {
     })
     .join("\n");
 
-  const output = `import type { PracticeItem } from "../types";\n\n${counts}\nexport const courseItems = ${toTypeScript(courseItems)} satisfies Record<string, PracticeItem[]>;\n`;
-  await writeFile(outputPath, output, "utf8");
+  await writeFile(outputPath, `${JSON.stringify(courseItems)}\n`, "utf8");
   console.log(counts);
 }
 

@@ -17,6 +17,16 @@ export const pool = new Pool({
 });
 
 type QueryParams = Array<string | number | boolean | null>;
+type SeedItem = {
+  id: string;
+  kind: "word" | "sentence";
+  promptZh: string;
+  answerEn: string;
+  phonetic?: string | null;
+  note?: string | null;
+  tags: string[];
+};
+const SEED_BATCH_SIZE = 400;
 
 export async function query<T = unknown>(text: string, params: QueryParams = []) {
   const result = await pool.query<T>(text, params);
@@ -166,39 +176,52 @@ async function seedCourses() {
         [course.id],
       );
 
-      for (const [position, item] of course.items.entries()) {
-        await client.query(
-          `
-            INSERT INTO practice_items (
-              id, course_id, kind, prompt_zh, answer_en, phonetic, note, tags_json, position, is_active
-            )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 1)
-            ON CONFLICT (id) DO UPDATE SET
-              course_id = EXCLUDED.course_id,
-              kind = EXCLUDED.kind,
-              prompt_zh = EXCLUDED.prompt_zh,
-              answer_en = EXCLUDED.answer_en,
-              phonetic = EXCLUDED.phonetic,
-              note = EXCLUDED.note,
-              tags_json = EXCLUDED.tags_json,
-              position = EXCLUDED.position,
-              is_active = 1
-          `,
-          [
-            item.id,
-            course.id,
-            item.kind,
-            item.promptZh,
-            item.answerEn,
-            item.phonetic ?? null,
-            item.note ?? null,
-            JSON.stringify(item.tags),
-            position,
-          ],
-        );
-      }
+      await upsertCourseItems(client, course.id, course.items);
     }
   });
+}
+
+async function upsertCourseItems(client: pg.PoolClient, courseId: string, items: SeedItem[]) {
+  for (let start = 0; start < items.length; start += SEED_BATCH_SIZE) {
+    const batch = items.slice(start, start + SEED_BATCH_SIZE);
+    const params: QueryParams = [];
+    const values = batch.map((item, batchIndex) => {
+      const offset = batchIndex * 10;
+      params.push(
+        item.id,
+        courseId,
+        item.kind,
+        item.promptZh,
+        item.answerEn,
+        item.phonetic ?? null,
+        item.note ?? null,
+        JSON.stringify(item.tags),
+        start + batchIndex,
+        1,
+      );
+      return `($${offset + 1}, $${offset + 2}, $${offset + 3}, $${offset + 4}, $${offset + 5}, $${offset + 6}, $${offset + 7}, $${offset + 8}, $${offset + 9}, $${offset + 10})`;
+    });
+
+    await client.query(
+      `
+        INSERT INTO practice_items (
+          id, course_id, kind, prompt_zh, answer_en, phonetic, note, tags_json, position, is_active
+        )
+        VALUES ${values.join(",\n")}
+        ON CONFLICT (id) DO UPDATE SET
+          course_id = EXCLUDED.course_id,
+          kind = EXCLUDED.kind,
+          prompt_zh = EXCLUDED.prompt_zh,
+          answer_en = EXCLUDED.answer_en,
+          phonetic = EXCLUDED.phonetic,
+          note = EXCLUDED.note,
+          tags_json = EXCLUDED.tags_json,
+          position = EXCLUDED.position,
+          is_active = 1
+      `,
+      params,
+    );
+  }
 }
 
 export async function listItemsByCourse(courseId: string) {
