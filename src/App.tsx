@@ -346,6 +346,7 @@ export default function App() {
   const chapterNumber = items.length > 0 ? Math.floor(chapterStart / CHAPTER_SIZE) + 1 : 0;
   const chapterCount = Math.max(1, Math.ceil(items.length / CHAPTER_SIZE));
   const globalIndex = activeItem ? chapterStart + index : 0;
+  const chapterEnd = Math.min(chapterStart + chapterItems.length, items.length);
   const letterStates = useMemo(
     () => (activeItem ? buildLetterStates(input, activeItem.answerEn, ignoreCase) : []),
     [activeItem, input, ignoreCase],
@@ -626,12 +627,36 @@ export default function App() {
     goToItem(index - 1);
   }
 
+  function goPreviousItem() {
+    goToItem(index - 1);
+    if (isTyping) focusCapture();
+  }
+
+  function goNextItem() {
+    goToItem(index + 1);
+    if (isTyping) focusCapture();
+  }
+
+  function goPreviousChapter() {
+    selectChapter(chapterStart - CHAPTER_SIZE);
+  }
+
   function goNextChapter() {
     if (chapterStart + CHAPTER_SIZE >= items.length) {
       restartCourse();
       return;
     }
     selectChapter(chapterStart + CHAPTER_SIZE);
+  }
+
+  function handleChapterSelect(value: string) {
+    selectChapter(Number(value) * CHAPTER_SIZE);
+    if (isTyping) focusCapture();
+  }
+
+  function handleItemSlider(value: string) {
+    goToItem(Number(value));
+    if (isTyping) focusCapture();
   }
 
   function handleKeyDown(event: React.KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>) {
@@ -1088,45 +1113,92 @@ export default function App() {
           </div>
         </section>
 
-        {items.length > CHAPTER_SIZE && (
-          <section className="chapter-strip" aria-label="章节选择">
-            {Array.from({ length: chapterCount }, (_, chapterIndex) => {
-              const start = chapterIndex * CHAPTER_SIZE;
-              const end = Math.min(start + CHAPTER_SIZE, items.length);
-              return (
-                <button
-                  className={start === chapterStart ? "active" : ""}
-                  key={start}
-                  onClick={() => selectChapter(start)}
-                  title={`第 ${chapterIndex + 1} 章：${start + 1}-${end}`}
-                >
-                  <span>第 {chapterIndex + 1} 章</span>
-                  <small>{start + 1}-{end}</small>
-                </button>
-              );
-            })}
+        {activeItem && (
+          <section className="lesson-navigator" aria-label="章节和题目导航">
+            <div className="chapter-picker">
+              <button
+                className="mini-nav-button"
+                onClick={goPreviousChapter}
+                disabled={chapterStart === 0}
+                title="上一章"
+              >
+                <ChevronLeft size={16} />
+              </button>
+              <label>
+                <span>章节</span>
+                <select value={String(chapterNumber - 1)} onChange={(event) => handleChapterSelect(event.target.value)}>
+                  {Array.from({ length: chapterCount }, (_, chapterIndex) => {
+                    const start = chapterIndex * CHAPTER_SIZE;
+                    const end = Math.min(start + CHAPTER_SIZE, items.length);
+                    return (
+                      <option key={start} value={chapterIndex}>
+                        第 {chapterIndex + 1} 章 · {start + 1}-{end}
+                      </option>
+                    );
+                  })}
+                </select>
+              </label>
+              <button
+                className="mini-nav-button"
+                onClick={goNextChapter}
+                disabled={chapterStart + CHAPTER_SIZE >= items.length}
+                title="下一章"
+              >
+                <ChevronRight size={16} />
+              </button>
+            </div>
+
+            <div className="item-scrubber">
+              <div className="item-scrubber-head">
+                <span>本章 {chapterStart + 1}-{chapterEnd}</span>
+                <strong>{chapterStart + index + 1}</strong>
+              </div>
+              <input
+                aria-label="跳转到本章题目"
+                type="range"
+                min="0"
+                max={Math.max(0, chapterItems.length - 1)}
+                value={index}
+                onChange={(event) => handleItemSlider(event.target.value)}
+                disabled={chapterItems.length <= 1}
+              />
+            </div>
+
+            <div className="item-jump" aria-label="题目跳转">
+              <button
+                className="mini-nav-button"
+                onClick={goPreviousItem}
+                disabled={index === 0}
+                title="上一题"
+              >
+                <ChevronLeft size={16} />
+              </button>
+              <label>
+                <span>题目</span>
+                <select value={String(index)} onChange={(event) => handleItemSlider(event.target.value)}>
+                  {chapterItems.map((item, itemIndex) => {
+                    const itemAttempts = attempts.filter((record) => record.itemId === item.id);
+                    const hasMistake = itemAttempts.some((record) => record.wrongCount > 0);
+                    const status = hasMistake ? " · 错题" : itemAttempts.length > 0 ? " · 已练" : "";
+                    return (
+                      <option key={item.id} value={itemIndex}>
+                        {chapterStart + itemIndex + 1} · {item.kind === "word" ? "单词" : "句子"}{status}
+                      </option>
+                    );
+                  })}
+                </select>
+              </label>
+              <button
+                className="mini-nav-button"
+                onClick={goNextItem}
+                disabled={index >= chapterItems.length - 1}
+                title="下一题"
+              >
+                <ChevronRight size={16} />
+              </button>
+            </div>
           </section>
         )}
-
-        <section className="word-dock" aria-label="本章题目">
-          {chapterItems.map((item, itemIndex) => {
-            const itemAttempts = attempts.filter((record) => record.itemId === item.id);
-            const hasMistake = itemAttempts.some((record) => record.wrongCount > 0);
-            return (
-              <button
-                key={item.id}
-                className={`${itemIndex === index ? "active" : ""} ${hasMistake ? "mistake" : ""}`}
-                onClick={() => goToItem(itemIndex)}
-                title={`${item.kind === "word" ? "单词" : "句子"} ${chapterStart + itemIndex + 1}`}
-              >
-                <span>
-                  {item.kind === "word" ? "W" : "S"}-{String(chapterStart + itemIndex + 1).padStart(3, "0")}
-                </span>
-                {itemAttempts.length > 0 && <small>{hasMistake ? "!" : "✓"}</small>}
-              </button>
-            );
-          })}
-        </section>
       </section>
 
       {chapterFinished && (
