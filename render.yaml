@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: meowenglish-api
+    runtime: node
+    plan: free
+    region: singapore
+    buildCommand: npm ci
+    startCommand: npm run api
+    healthCheckPath: /api/health
+    autoDeployTrigger: commit
+    envVars:
+      - key: NODE_VERSION
+        value: 22
+      - key: NODE_ENV
+        value: production
+      - key: CORS_ORIGIN
+        value: https://mi0uno.github.io
+      - key: DATABASE_URL
+        sync: false

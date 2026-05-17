@@ -109,7 +109,7 @@ API_PORT=5180 npm run dev
 
 GitHub Pages 只能托管前端静态文件，不能运行 Express 后端，也不能直接安全连接数据库。完整线上功能需要两部分：
 
-1. 将后端部署到 Render、Railway、Fly.io 等 Node.js 平台，并设置：
+1. 将后端部署到 Render、Railway、Fly.io 等 Node.js 平台。本仓库已提供 `render.yaml`，在 Render 里选择 Blueprint 部署后，设置：
 
 ```bash
 DATABASE_URL=你的 Neon 连接串
@@ -117,13 +117,22 @@ CORS_ORIGIN=https://mi0uno.github.io
 NODE_ENV=production
 ```
 
-2. GitHub Pages 构建前端时设置：
+Render 部署成功后，先访问：
 
 ```bash
+https://你的后端域名/api/health
+```
+
+如果返回 `{"ok":true}`，说明后端已上线。
+
+2. 在 GitHub 仓库里添加变量：
+
+```bash
+Settings -> Secrets and variables -> Actions -> Variables
 VITE_API_BASE_URL=https://你的后端域名
 ```
 
-这样 GitHub Pages 前端会请求线上 API，线上 API 再连接 Neon 数据库。
+然后重新运行 `Deploy GitHub Pages` 工作流。这样 GitHub Pages 前端会请求线上 API，线上 API 再连接 Neon 数据库。
 
 ## 学习资料格式
 

@@ -34,6 +34,7 @@ import type { CourseRow, DbUser, ItemRow, ProgressRow } from "./types";
 
 const app = express();
 const port = Number(process.env.API_PORT ?? process.env.PORT ?? 5174);
+const host = process.env.API_HOST ?? "0.0.0.0";
 const corsOrigin = process.env.CORS_ORIGIN ?? "http://localhost:5173";
 
 app.use((req, res, next) => {
@@ -669,8 +670,8 @@ app.use((err: unknown, _req: express.Request, res: express.Response, _next: expr
 
 initDb()
   .then(() => {
-    app.listen(port, () => {
-      console.log(`MeowEnglish API running at http://127.0.0.1:${port}`);
+    app.listen(port, host, () => {
+      console.log(`MeowEnglish API running at http://${host}:${port}`);
     });
   })
   .catch((error) => {
